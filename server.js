@@ -77,3 +77,89 @@ app.post('/chat', async (req, res) => {
 
   try {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 200, system: CHAT_PROMPT, messages: clean })
+    });
+    if (!r.ok) { const e = await r.json(); return res.status(500).json({ error: e.error?.message }); }
+    const data = await r.json();
+    res.json({ reply: data.content.map(b => b.text || '').join('') });
+  } catch (e) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.post('/analyze', async (req, res) => {
+  const { messages } = req.body;
+  if (!messages?.length) return res.status(400).json({ error: 'Messages requis' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'Clé API manquante' });
+
+  const clean = messages.map(m => {
+    if (typeof m.content === 'string') return { role: m.role, content: m.content };
+    if (Array.isArray(m.content)) {
+      return { role: m.role, content: m.content.filter(b =>
+        b.type === 'text' || (b.type === 'image' && ['image/jpeg','image/png','image/gif','image/webp'].includes(b.source?.media_type))
+      )};
+    }
+    return { role: m.role, content: String(m.content) };
+  });
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 2000, system: ANALYSIS_PROMPT, messages: clean })
+    });
+    if (!r.ok) { const e = await r.json(); return res.status(500).json({ error: e.error?.message }); }
+    const data = await r.json();
+    const raw = data.content.map(b => b.text || '').join('');
+    try {
+      const clean_json = raw.replace(/```json|```/g, '').trim();
+      res.json({ analysis: JSON.parse(clean_json), raw });
+    } catch(e) {
+      res.json({ analysis: null, raw });
+    }
+  } catch (e) {
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+app.post('/generate-image', async (req, res) => {
+  const { prompt, size = '1024x1024' } = req.body;
+  if (!prompt) return res.status(400).json({ error: 'Prompt requis' });
+  if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'Clé OpenAI manquante' });
+
+  try {
+    const r = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({ model: 'dall-e-3', prompt, n: 1, size, quality: 'standard' })
+    });
+    if (!r.ok) { const e = await r.json(); return res.status(500).json({ error: e.error?.message }); }
+    const data = await r.json();
+    res.json({ url: data.data[0]?.url });
+  } catch (e) {
+    res.status(500).json({ error: 'Erreur génération image' });
+  }
+});
+
+app.post('/lead', (req, res) => {
+  const { nom, email, telephone, projet, estimation, montant_libre } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email requis' });
+  const lead = { id: Date.now(), date: new Date().toISOString(), nom: nom||'Anonyme', email, telephone: telephone||'', projet: projet||'', estimation: estimation||'', montant_libre: montant_libre||0, source: 'alya-ia.fr' };
+  leads.push(lead);
+  console.log('🎯 Lead:', email, '| Projet:', projet);
+  res.json({ success: true });
+});
+
+app.get('/leads', (req, res) => {
+  if (req.query.key !== process.env.ADMIN_KEY) return res.status(401).json({ error: 'Non autorisé' });
+  res.json({ total: leads.length, leads });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`✅ Alya API v4 — port ${PORT}`);
+  console.log(`🔑 Anthropic: ${process.env.ANTHROPIC_API_KEY ? 'OK ✓' : 'MANQUANTE ✗'}`);
+  console.log(`🎨 OpenAI DALL-E: ${process.env.OPENAI_API_KEY ? 'OK ✓' : 'MANQUANTE ✗'}`);
+});
